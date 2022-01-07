@@ -147,40 +147,44 @@ void jrReliableUDP::Socket::listen() {
 
 jrReliableUDP::Socket jrReliableUDP::Socket::accept() {
     Socket conn;
-    conn.bind(0);   // Connection socket bind a temporary available port
-    conn.is_passive_end = true;
-    // The listening socket receives the SYN of the connection initiator
-    switch(current_state) {
-    case CLOSED:
-        throw std::runtime_error("Not listening");
-    case LISTEN:
-    {
-        // wait for peer's SYN(LISTEN->SYN_RCVD)
-        RawPacket syn = wait_raw_packet();
-        if(IS_SYN(syn.type)) {
-            conn.peer_address = peer_address;
-            conn.current_ack_num = current_ack_num;
-            conn.current_state = SYN_RCVD;
-            // Reset listen socket's peer address
-            set_local_address(port);
+    bool stop = false;
+    while(!stop) {
+        switch(current_state) {
+        case CLOSED:
+            throw std::runtime_error("Not listening");
+        case LISTEN:
+        {
+            // wait for peer's SYN(LISTEN->SYN_RCVD)
+            RawPacket syn = wait_raw_packet();
+            if(IS_SYN(syn.type)) {
+                current_state = SYN_RCVD;
+            } else {
+                // Received other type packet, send RST
+                send_raw_packet(RST);
+                throw std::runtime_error("Connection invalid");
+            }
+        }
+            break;
+        case SYN_RCVD:
+            send_raw_packet(ACK);
+            // Send SYN and wait for peer's ACK
+            send_raw_packet(SYN);
+            // SYN_RCVD->ESTABLISHED
+            current_state = ESTABLISHED;
+            break;
+        case ESTABLISHED:
+            conn.current_state = ESTABLISHED;
+            current_state = LISTEN;
+            stop = true;
+            break;
+        default:
+            break;
         }
     }
-        break;
-    default:
-        break;
-    }
-    // The connection socket responds to the connection initiation segment and transmits its own SYN
-    switch(conn.current_state) {
-    case SYN_RCVD:
-        conn.send_raw_packet(ACK);
-        // Send SYN and wait for peer's ACK
-        conn.send_raw_packet(SYN);
-        // SYN_RCVD->ESTABLISHED
-        conn.current_state = ESTABLISHED;
-        break;
-    default:
-        break;
-    }
+    conn.sockfd = ::dup(sockfd);
+    conn.is_passive_end = true;
+    conn.peer_address = peer_address;
+    conn.current_ack_num = current_ack_num;
     return conn;
 }
 
