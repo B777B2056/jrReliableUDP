@@ -12,6 +12,11 @@ jrReliableUDP::Socket::Socket() : current_seq_num(init_seq_num()), current_ack_n
     }
 }
 
+jrReliableUDP::Socket::Socket(int fd, bool is_passive_end, sockaddr_in peer_addr,
+                              uint32_t csn, uint32_t can, ConnectionState cs)
+    : sockfd(fd), is_passive_end(is_passive_end), addr(peer_addr),
+      current_seq_num(csn), current_ack_num(can), current_win_size(flow_win_size()), current_state(cs) {}
+
 uint32_t jrReliableUDP::Socket::init_seq_num() const {
     return 0;
 }
@@ -21,10 +26,10 @@ uint16_t jrReliableUDP::Socket::flow_win_size() const {
 }
 
 void jrReliableUDP::Socket::set_local_address(uint port) {
-    ::memset(&peer_address, 0, sizeof(peer_address));
-    peer_address.sin_family = AF_INET;
-    peer_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    peer_address.sin_port = htons(port);
+    ::memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
 }
 
 void jrReliableUDP::Socket::set_peer_address(std::string ip, uint port) {
@@ -34,11 +39,11 @@ void jrReliableUDP::Socket::set_peer_address(std::string ip, uint port) {
         throw std::runtime_error(error_msg("IP address parsing failed"));
     }
     // init struct
-    ::memset(&peer_address, 0, sizeof(peer_address));
+    ::memset(&addr, 0, sizeof(addr));
     // fill the struct
-    peer_address.sin_family = AF_INET;		// protocol
-    peer_address.sin_addr.s_addr = inet_addr(inet_ntoa(*(in_addr*)(hpk->h_addr_list[0])));
-    peer_address.sin_port = htons(port);		// target process port number
+    addr.sin_family = AF_INET;		// protocol
+    addr.sin_addr.s_addr = inet_addr(inet_ntoa(*(in_addr*)(hpk->h_addr_list[0])));
+    addr.sin_port = htons(port);		// target process port number
 }
 
 void jrReliableUDP::Socket::send_raw_packet(uint type) {
@@ -50,16 +55,16 @@ void jrReliableUDP::Socket::send_raw_packet(uint type) {
     p1.mss = DEFAULT_MSS;
     char buf[sizeof(RawPacket)];
     ::memmove(buf, &p1, sizeof(RawPacket));
-    ::sendto(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&peer_address), sizeof(peer_address));
+    ::sendto(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
     sent_packets[p1.seq_num] = p1;
     if(type == ACK) {
         return ;
     }
-    socklen_t len = sizeof(peer_address);
+    socklen_t len = sizeof(addr);
     RawPacket p2;
-    ::memset(&peer_address, 0, len);
+    ::memset(&addr, 0, len);
     ++current_seq_num;
-    if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&peer_address), &len) > 0) {
+    if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
         ::memmove(&p2, buf, sizeof(RawPacket));
         if(IS_ACK(p2.type)) {
             if(p2.ack_num == current_seq_num) {
@@ -69,7 +74,7 @@ void jrReliableUDP::Socket::send_raw_packet(uint type) {
                 // Wrong ACK, need retransmit
                 RawPacket p = sent_packets[p2.ack_num];
                 ::memmove(buf, &p, sizeof(RawPacket));
-                ::sendto(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&peer_address), sizeof(peer_address));
+                ::sendto(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
             }
         }
     } else {
@@ -78,11 +83,11 @@ void jrReliableUDP::Socket::send_raw_packet(uint type) {
 }
 
 jrReliableUDP::RawPacket jrReliableUDP::Socket::wait_raw_packet() {
-    socklen_t len = sizeof(peer_address);
+    socklen_t len = sizeof(addr);
     RawPacket packet;
     char packet_buf[sizeof(RawPacket)];
-    ::memset(&peer_address, 0, len);
-    if(::recvfrom(sockfd, packet_buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&peer_address), &len) > 0) {
+    ::memset(&addr, 0, len);
+    if(::recvfrom(sockfd, packet_buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
         ::memmove(&packet, packet_buf, sizeof(RawPacket));
         current_ack_num = packet.seq_num + 1;
         return packet;
@@ -93,7 +98,7 @@ jrReliableUDP::RawPacket jrReliableUDP::Socket::wait_raw_packet() {
 
 void jrReliableUDP::Socket::bind(uint port) {
     set_local_address(port);
-    if(-1 == ::bind(sockfd, reinterpret_cast<sockaddr*>(&peer_address), sizeof(sockaddr_in))) {
+    if(-1 == ::bind(sockfd, reinterpret_cast<sockaddr*>(&addr), sizeof(sockaddr_in))) {
         ::close(sockfd);
         throw std::runtime_error(error_msg("Bind failed"));
     }
@@ -146,7 +151,6 @@ void jrReliableUDP::Socket::listen() {
 }
 
 jrReliableUDP::Socket jrReliableUDP::Socket::accept() {
-    Socket conn;
     bool stop = false;
     while(!stop) {
         switch(current_state) {
@@ -173,7 +177,6 @@ jrReliableUDP::Socket jrReliableUDP::Socket::accept() {
             current_state = ESTABLISHED;
             break;
         case ESTABLISHED:
-            conn.current_state = ESTABLISHED;
             current_state = LISTEN;
             stop = true;
             break;
@@ -181,11 +184,7 @@ jrReliableUDP::Socket jrReliableUDP::Socket::accept() {
             break;
         }
     }
-    conn.sockfd = ::dup(sockfd);
-    conn.is_passive_end = true;
-    conn.peer_address = peer_address;
-    conn.current_ack_num = current_ack_num;
-    return conn;
+    return Socket(::dup(sockfd), true, addr, current_seq_num, current_ack_num, ESTABLISHED);
 }
 
 void jrReliableUDP::Socket::disconnect() {

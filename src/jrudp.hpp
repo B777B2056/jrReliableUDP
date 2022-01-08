@@ -39,21 +39,22 @@ namespace jrReliableUDP {
 
     class Socket {
     private:
-        bool is_passive_end;
         enum ConnectionState {CLOSED, SYN_SENT, LISTEN, SYN_RCVD, ESTABLISHED,
                               FIN_WAIT, TIME_WAIT, CLOSE_WAIT, LAST_ACK};
 
     private:
         int sockfd;
         uint port;
+        bool is_passive_end;
+        sockaddr_in addr;
         uint32_t current_seq_num;
         uint32_t current_ack_num;
         uint16_t current_win_size;
-        sockaddr_in peer_address;
         ConnectionState current_state;
         std::map<uint32_t, RawPacket> sent_packets;
 
     private:
+        Socket(int fd, bool is_passive_end, sockaddr_in addr, uint32_t csn, uint32_t can, ConnectionState cs);
         uint32_t init_seq_num() const;
         uint16_t flow_win_size() const;
         void set_local_address(uint port);
@@ -63,7 +64,7 @@ namespace jrReliableUDP {
 
     public:
         Socket();
-        ~Socket() { }
+        ~Socket() = default;
         void bind(uint port);   // Bind a local port
         void connect(std::string peer_ip, uint peer_port);  // Actively open, Send SYN and ISN to peer, CLOSED->SYN_SENT
         void listen();  // Passively open, wait SYN and ISN,CLOSED->SYN_RCVD
