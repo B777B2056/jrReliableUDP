@@ -19,8 +19,9 @@
 #define ACK (8)
 #define DEFAULT_MSS (1460)
 #define OVERTIME_SEC (1)
-#define DUPTHRESH 3
-#define RTT_INIT 1000
+#define DUPTHRESH (3)
+#define RTT_INIT (1000)
+#define MAX_SIZE (512)
 
 #define IS_ACK(type) ((type&ACK) == ACK)
 #define IS_SYN(type) ((type&SYN) == SYN)
@@ -34,7 +35,7 @@ namespace jrReliableUDP {
         uint16_t win_size;  // flow control sliding window size
         uint type:4;    // 4 bit flag: ACK, SYN, FIN, RST
         uint mss:12;
-        char* data;
+        char data[MAX_SIZE];
     };
 
     std::string error_msg(std::string msg);

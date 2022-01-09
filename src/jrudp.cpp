@@ -81,8 +81,8 @@ void jrReliableUDP::Socket::send_raw_packet(const RawPacket& pkg) {
             if(ack_pkg.ack_num >= cur_seq_num) {
                 // Correct ACK
                 dupack_cnt = 0; // Reset counter
-                cur_ack_num = ack_pkg.seq_num + 1; // Update ACK num
-                sent_pkgs.erase(sent_pkgs.begin(), sent_pkgs.find(cur_ack_num));  // Update sent buffer
+                cur_seq_num = ack_pkg.ack_num;
+                sent_pkgs.erase(sent_pkgs.begin(), sent_pkgs.find(ack_pkg.ack_num));  // Update sent buffer
             } else {
                 // Duplicate ACK
                 if(dupack_cnt == DUPTHRESH) {
@@ -104,8 +104,13 @@ void jrReliableUDP::Socket::send_raw_packet(const RawPacket& pkg) {
             throw std::runtime_error("Connection closed by peer.");
         }
     } else {
-        ::close(sockfd);
-        throw std::runtime_error(error_msg("Send failed"));
+        if(errno == EAGAIN) {
+            // Recv ACK timeout, retransmit current pkg
+            send_raw_packet(pkg);
+        } else {
+            ::close(sockfd);
+            throw std::runtime_error(error_msg("Send failed"));
+        }
     }
 }
 
@@ -127,11 +132,11 @@ PKG_MISSING:
     ::memset(&addr, 0, len);
     if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
         ::memmove(&pkg, buf, sizeof(RawPacket));
-        if(rcvd_pkgs.rbegin()->first == pkg.seq_num + 1) {
+        if(cur_ack_num == pkg.seq_num) {
             cur_ack_num = pkg.seq_num + 1;
             rcvd_pkgs[pkg.seq_num] = pkg;
             send_raw_packet(ACK);
-        } else {
+        } else if(cur_ack_num < pkg.seq_num) {
             send_raw_packet(ACK);
             goto PKG_MISSING;
         }
@@ -139,12 +144,8 @@ PKG_MISSING:
         rcvd_pkgs.erase(rcvd_pkgs.begin());
         return ret;
     } else {
-        if(errno == EAGAIN) {
-            // Recv timeout
-
-        } else {
-            throw std::runtime_error(error_msg("Recv failed"));
-        }
+        ::close(sockfd);
+        throw std::runtime_error(error_msg("Recv failed"));
     }
 }
 
@@ -165,7 +166,6 @@ void jrReliableUDP::Socket::connect(std::string peer_ip, uint16_t peer_port) {
         case CLOSED:
             // Set peer ip and port
             set_peer_address(peer_ip, peer_port);
-            //    ::alarm(OVERTIME_SEC);
             // Send SYN and ISN(CLOSED->SYN_SENT)
             send_raw_packet(SYN);
             cur_state = SYN_SENT;
@@ -303,9 +303,25 @@ void jrReliableUDP::Socket::disconnect() {
 }
 
 std::string jrReliableUDP::Socket::recv_pkg() {
-
+    if(cur_state != ESTABLISHED) {
+        throw std::runtime_error("Connection is not ESTABLISHED");
+    }
+    return std::string(wait_raw_packet().data);
 }
 
 void jrReliableUDP::Socket::send_pkg(const std::string& data) {
-
+    if(cur_state != ESTABLISHED) {
+        throw std::runtime_error("Connection is not ESTABLISHED");
+    }
+    if(data.size() > MAX_SIZE) {
+        throw std::runtime_error("Package too large");
+    }
+    RawPacket pkg;
+    pkg.seq_num = cur_seq_num;
+    pkg.ack_num = cur_ack_num;
+    pkg.win_size = cur_win_size;
+    pkg.type = DATA;
+    pkg.mss = DEFAULT_MSS;
+    ::strcpy(pkg.data, data.data());
+    send_raw_packet(pkg);
 }
