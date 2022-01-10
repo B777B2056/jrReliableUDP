@@ -1,6 +1,12 @@
 #ifndef _JRUDP_H
 #define _JRUDP_H
 
+#define DEBUG
+#ifdef DEBUG
+#include <vector>
+#include <iostream>
+#endif
+
 #include <map>
 #include <queue>
 #include <string>
@@ -44,6 +50,10 @@ namespace jrReliableUDP {
     private:
         enum ConnectionState {CLOSED, SYN_SENT, LISTEN, SYN_RCVD, ESTABLISHED,
                               FIN_WAIT, TIME_WAIT, CLOSE_WAIT, LAST_ACK};
+#ifdef DEBUG
+        std::vector<std::string> states = {"CLOSED", "SYN_SENT", "LISTEN", "SYN_RCVD", "ESTABLISHED",
+                                           "FIN_WAIT", "TIME_WAIT", "CLOSE_WAIT", "LAST_ACK"};
+#endif
 
     private:
         int sockfd;

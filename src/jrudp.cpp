@@ -5,7 +5,7 @@ std::string jrReliableUDP::error_msg(std::string msg) {
 }
 
 jrReliableUDP::Socket::Socket() : cur_seq_num(init_seq_num()), cur_ack_num(0),
-                                  cur_win_size(flow_win_size()), cur_state(CLOSED), dupack_cnt(0) {
+                                  cur_win_size(flow_win_size()), cur_state(CLOSED), dupack_cnt(1) {
     sockfd = ::socket(AF_INET, SOCK_DGRAM, 0);
     if(-1 == sockfd) {
         throw std::runtime_error(error_msg("Socket create failed"));
@@ -15,7 +15,7 @@ jrReliableUDP::Socket::Socket() : cur_seq_num(init_seq_num()), cur_ack_num(0),
 jrReliableUDP::Socket::Socket(int fd, bool is_passive_end, sockaddr_in peer_addr,
                               uint32_t csn, uint32_t can, ConnectionState cs)
     : sockfd(fd), is_passive_end(is_passive_end), addr(peer_addr),
-      cur_seq_num(csn), cur_ack_num(can), cur_win_size(flow_win_size()), cur_state(cs), dupack_cnt(0) {}
+      cur_seq_num(csn), cur_ack_num(can), cur_win_size(flow_win_size()), cur_state(cs), dupack_cnt(1) {}
 
 jrReliableUDP::Socket::~Socket() {
     if(cur_state == LISTEN) {
@@ -73,25 +73,32 @@ void jrReliableUDP::Socket::send_raw_packet(const RawPacket& pkg) {
     socklen_t len = sizeof(sockaddr_in);
     RawPacket ack_pkg;
     ::memset(&addr, 0, len);
+#ifdef DEBUG
+    std::cout << states[cur_state] << ",";
+    std::cout << "Sent SEQ:" << cur_seq_num << ",";
+#endif
     ++cur_seq_num;
     if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
         ::memmove(&ack_pkg, buf, sizeof(RawPacket));
         if(IS_ACK(ack_pkg.type)) {
+#ifdef DEBUG
+            std::cout << "Received ACK:" << ack_pkg.ack_num << std::endl;
+#endif
             // ACK arrived
             if(ack_pkg.ack_num >= cur_seq_num) {
                 // Correct ACK
-                dupack_cnt = 0; // Reset counter
+                dupack_cnt = 1; // Reset counter
                 cur_seq_num = ack_pkg.ack_num;
                 sent_pkgs.erase(sent_pkgs.begin(), sent_pkgs.find(ack_pkg.ack_num));  // Update sent buffer
             } else {
                 // Duplicate ACK
                 if(dupack_cnt == DUPTHRESH) {
                     // Reset counter
-                    dupack_cnt = 0;
+                    dupack_cnt = 1;
                     // Retransmit all
                     uint32_t right = cur_seq_num;
                     cur_seq_num = ack_pkg.ack_num;
-                    for(uint32_t i = ack_pkg.ack_num; i <= right; ++i) {
+                    for(uint32_t i = ack_pkg.ack_num; i < right; ++i) {
                         send_raw_packet(sent_pkgs[i]);
                     }
                 } else {
@@ -128,16 +135,38 @@ jrReliableUDP::RawPacket jrReliableUDP::Socket::wait_raw_packet() {
     socklen_t len = sizeof(addr);
     RawPacket pkg;
     char buf[sizeof(RawPacket)];
+#ifdef DEBUG
+    int drop_cnt = 0;
+#endif
 PKG_MISSING:
     ::memset(&addr, 0, len);
     if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
         ::memmove(&pkg, buf, sizeof(RawPacket));
+#ifdef DEBUG
+        if(pkg.seq_num == 2) {
+            ++drop_cnt;
+            if(drop_cnt == 1) {
+                goto RETRANSMIT;
+            }
+        }
+        std::cout << states[cur_state] << ",";
+        std::cout << "Received SEQ:" << pkg.seq_num << ",";
+#endif
         if(cur_ack_num == pkg.seq_num) {
             cur_ack_num = pkg.seq_num + 1;
             rcvd_pkgs[pkg.seq_num] = pkg;
             send_raw_packet(ACK);
+#ifdef DEBUG
+        std::cout << "Sent ACK:" << cur_ack_num << std::endl;
+#endif
         } else if(cur_ack_num < pkg.seq_num) {
+#ifdef DEBUG
+RETRANSMIT:
+#endif
             send_raw_packet(ACK);
+#ifdef DEBUG
+        std::cout << "Sent ACK:" << cur_ack_num << std::endl;
+#endif
             goto PKG_MISSING;
         }
         RawPacket ret = rcvd_pkgs.begin()->second;
@@ -263,6 +292,9 @@ void jrReliableUDP::Socket::disconnect() {
                 break;
             case CLOSED:
                 ::close(sockfd);
+#ifdef DEBUG
+                std::cout << states[cur_state] << std::endl;
+#endif
                 return ;
             default:
                 throw std::runtime_error("Not connecting");
@@ -294,6 +326,9 @@ void jrReliableUDP::Socket::disconnect() {
                 break;
             case CLOSED:
                 ::close(sockfd);
+#ifdef DEBUG
+                std::cout << states[cur_state] << std::endl;
+#endif
                 return ;
             default:
                 throw std::runtime_error("Not connecting");
