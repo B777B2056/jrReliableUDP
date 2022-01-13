@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <errno.h>
 #include <unistd.h>
+#include <signal.h>
 #include <arpa/inet.h>
 
 namespace jrReliableUDP {
@@ -28,6 +29,7 @@ namespace jrReliableUDP {
     private:
         Socket(int fd, bool is_passive_end, sockaddr_in addr, RTO rto,
                const Sender& s, const Recver& r, ConnectionState cs);
+//        static void keep_alive_timeout(int sig);
         [[noreturn]] void disconnect_exception(std::string msg);
         void set_local_address(uint16_t port);
         void set_peer_address(std::string ip, uint16_t port);

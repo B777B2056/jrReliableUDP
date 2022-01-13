@@ -2,17 +2,17 @@
 
 namespace jrReliableUDP {
     Recver::Recver(int sockfd, sockaddr_in& addr, RTO& rto)
-        : sockfd(sockfd), addr(addr), rto(rto), cur_ack_num(0), RCV_NXT(0), RCV_WND(1) {
+        : sockfd(sockfd), addr(addr), rto(rto), is_rcvd_fin(false), cur_ack_num(0), RCV_NXT(0), RCV_WND(1) {
 
     }
 
     Recver::Recver(int sockfd, sockaddr_in& addr, RTO& rto, const Recver& r)
-        : sockfd(sockfd), addr(addr), rto(rto), cur_ack_num(r.cur_ack_num), RCV_NXT(0), RCV_WND(init_WND()) {
+        : sockfd(sockfd), addr(addr), rto(rto), is_rcvd_fin(false), cur_ack_num(r.cur_ack_num), RCV_NXT(0), RCV_WND(init_WND()) {
 
     }
 
     Recver::Recver(int sockfd, sockaddr_in& addr, RTO& rto, const Recver& r, uint16_t RCV_WND)
-        : sockfd(sockfd), addr(addr), rto(rto), cur_ack_num(r.cur_ack_num), RCV_NXT(0), RCV_WND(RCV_WND) {
+        : sockfd(sockfd), addr(addr), rto(rto), is_rcvd_fin(false), cur_ack_num(r.cur_ack_num), RCV_NXT(0), RCV_WND(RCV_WND) {
 
     }
 
@@ -45,11 +45,12 @@ namespace jrReliableUDP {
         int drop_cnt = 0;
     #endif
         int dup_cnt = 0;
-        ::memset(&addr, 0, len);
         cancel_timeout();
         for(uint16_t i = RCV_NXT; i < RCV_WND; ) {
+            ::memset(&addr, 0, len);
             if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
                 ::memmove(&pkg, buf, sizeof(RawPacket));
+
     #ifdef FAST_TRANSMIT_DEBUG
                 if(pkg.seq_num == 2) {
                     ++drop_cnt;
@@ -57,8 +58,7 @@ namespace jrReliableUDP {
                         goto RETRANSMIT;
                     }
                 }
-    #endif
-    #ifdef TIMEOUT_TRANSMIT_DEBUG
+    #elseif define TIMEOUT_TRANSMIT_DEBUG
                 if(pkg.seq_num == 2) {
                     ++drop_cnt;
                     if(drop_cnt == 1) {
@@ -77,8 +77,14 @@ namespace jrReliableUDP {
     #ifdef DEBUG
                     std::cout << "Sent ACK:" << cur_ack_num << std::endl;
     #endif
+                    if(IS_RST(pkg.type)) {
+                        ::close(sockfd);
+                        std::runtime_error("Connection reset by peer.");
+                    }
                     if(IS_FIN(pkg.type)) {
-                        return pkg;
+                        is_rcvd_fin = true;
+                        RCV_NXT = RCV_WND;
+                        break;
                     }
                     ++i;
                     ++RCV_NXT;
@@ -108,9 +114,19 @@ namespace jrReliableUDP {
                 throw std::runtime_error(error_msg("Recv failed"));
             }
         }
-        RawPacket ret = rwnd.begin()->second;
-        rwnd.erase(rwnd.begin());
-        --RCV_NXT;
+        RawPacket ret;
+        if(!rwnd.empty()) {
+            ret = rwnd.begin()->second;
+            rwnd.erase(rwnd.begin());
+            if(!is_rcvd_fin) {
+                --RCV_NXT;
+            }
+        } else {
+            ret.data[0] = '\0';
+            if(is_rcvd_fin) {
+                ret.type |= FIN;
+            }
+        }
         return ret;
     }
 }

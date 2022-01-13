@@ -36,7 +36,9 @@ namespace jrReliableUDP {
         void reset_WND() { SND_WND = 1; }
         void send_SYN();
         void send_FIN();
+        void send_RST();
         void send_DATA(const std::string& data);
+//        void send_keepalive_probe();
         void send_all_in_buf();
     };
 }

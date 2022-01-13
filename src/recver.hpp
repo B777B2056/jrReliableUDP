@@ -9,6 +9,7 @@ namespace jrReliableUDP {
         int sockfd;
         sockaddr_in& addr;
         RTO& rto;
+        bool is_rcvd_fin;
         uint32_t cur_ack_num;
         uint16_t RCV_NXT;
         uint16_t RCV_WND;

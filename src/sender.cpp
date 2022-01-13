@@ -115,7 +115,7 @@ namespace jrReliableUDP {
                         }
                     }
                 } else if(IS_RST(ack_pkg.type)) {
-//                    // RST arrived
+                    // RST arrived
                     throw std::runtime_error("Connection closed by peer.");
                 }
             } else {
@@ -171,9 +171,17 @@ namespace jrReliableUDP {
         send_raw_packet(RawPacket(cur_seq_num, 0, 0, FIN));
     }
 
+    void Sender::send_RST() {
+        send_raw_packet(RawPacket(cur_seq_num, 0, 0, RST));
+    }
+
     void Sender::send_DATA(const std::string& data) {
         send_raw_packet(RawPacket(cur_seq_num, 0, 0, DATA, data));
     }
+
+//    void Sender::send_keepalive_probe() {
+//        send_raw_packet(RawPacket(swnd.begin()->first-1, 0, 0, DATA));
+//    }
 
     void Sender::send_all_in_buf() {
         while(!swnd.empty()) {

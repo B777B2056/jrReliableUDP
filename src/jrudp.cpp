@@ -12,7 +12,11 @@ jrReliableUDP::Socket::Socket(int fd, bool is_passive_end, sockaddr_in peer_addr
                               const Sender& s, const Recver& r, ConnectionState cs)
     : sockfd(fd), is_passive_end(is_passive_end), addr(peer_addr), rto(rto), cur_state(cs),
       sender(sockfd, addr, this->rto, s), recver(sockfd, addr, this->rto, r) {
-
+//    struct sigaction act;
+//    act.sa_handler = Socket::keep_alive_timeout;
+//    ::sigemptyset(&act.sa_mask);
+//    act.sa_flags = 0;
+//    ::sigaction(SIGALRM, &act, nullptr);
 }
 
 jrReliableUDP::Socket::~Socket() {
@@ -20,6 +24,13 @@ jrReliableUDP::Socket::~Socket() {
         ::close(sockfd);
     }
 }
+
+//void jrReliableUDP::Socket::keep_alive_timeout(int sig) {
+//    if(sig == SIGALRM) {
+//        // Start send keep alive probe packet
+
+//    }
+//}
 
 void jrReliableUDP::Socket::disconnect_exception(std::string msg) {
     ::close(sockfd);
@@ -124,7 +135,7 @@ jrReliableUDP::Socket jrReliableUDP::Socket::accept() {
                 cur_state = SYN_RCVD;
             } else {
                 // Received other type packet, send RST
-//                send_raw_packet(make_raw_pkg(RST));
+                sender.send_RST();
                 disconnect_exception("Connection invalid");
             }
         }
@@ -147,8 +158,10 @@ jrReliableUDP::Socket jrReliableUDP::Socket::accept() {
 }
 
 void jrReliableUDP::Socket::disconnect() {
-    // Send all pkg in send buffer
-    sender.send_all_in_buf();
+    if(cur_state == ESTABLISHED) {
+        // Send all pkg in send buffer
+        sender.send_all_in_buf();
+    }
     sender.reset_WND();
     recver.reset_WND();
     if(is_passive_end) {
@@ -232,12 +245,9 @@ std::string jrReliableUDP::Socket::recv_pkg() {
     } else {
         RawPacket pkg = recver.recv_raw_packet();
         if(IS_FIN(pkg.type)) {
-            cur_state = LAST_ACK;
-            disconnect();
-            return "";
-        } else {
-            return std::string(pkg.data);
+            cur_state = CLOSE_WAIT;
         }
+        return std::string(pkg.data);
     }
 }
 
