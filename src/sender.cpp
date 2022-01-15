@@ -3,19 +3,19 @@
 namespace jrReliableUDP {
     Sender::Sender(int sockfd, sockaddr_in& addr, RTO& rto)
         : sockfd(sockfd), addr(addr), rto(rto), cur_seq_num(0), dupack_cnt(1),
-        SND_WND(1), CONG_WND(1), ssthresh(init_ssthresh()), is_fast_recover(false) {
+        SND_NXT(0), SND_WND(1), CONG_WND(1), ssthresh(init_ssthresh()), is_fast_recover(false) {
 
     }
 
     Sender::Sender(int sockfd, sockaddr_in& addr, RTO& rto, const Sender& s)
         : sockfd(sockfd), addr(addr), rto(rto), cur_seq_num(s.cur_seq_num), dupack_cnt(1),
-        SND_WND(init_WND()), CONG_WND(1), ssthresh(init_ssthresh()), is_fast_recover(false) {
+        SND_NXT(0), SND_WND(init_WND()), CONG_WND(1), ssthresh(init_ssthresh()), is_fast_recover(false) {
 
     }
 
     Sender::Sender(int sockfd, sockaddr_in& addr, RTO& rto, const Sender& s, uint16_t SND_WND)
         : sockfd(sockfd), addr(addr), rto(rto), cur_seq_num(s.cur_seq_num), dupack_cnt(1),
-        SND_WND(SND_WND), CONG_WND(1), ssthresh(init_ssthresh()), is_fast_recover(false) {
+        SND_NXT(0), SND_WND(SND_WND), CONG_WND(1), ssthresh(init_ssthresh()), is_fast_recover(false) {
 
     }
 
@@ -40,17 +40,27 @@ namespace jrReliableUDP {
 
     void Sender::send_pkgs_in_buf() {
         char buf[sizeof(RawPacket)];
-        for(auto& pkgs : swnd) {
-            RawPacket p = pkgs.second;
-            ::memmove(buf, &p, sizeof(RawPacket));
-            if(-1 == ::sendto(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr))) {
-                throw std::runtime_error(jrReliableUDP::error_msg("Send error:"));
-            }
+        auto it = swnd.begin();
+        std::advance(it, SND_NXT);
+        RawPacket p = it->second;
+        ::memmove(buf, &p, sizeof(RawPacket));
+        if(-1 == ::sendto(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr))) {
+            throw std::runtime_error(jrReliableUDP::error_msg("Send error:"));
         }
-    #ifdef DEBUG
-        std::cout << "Sent SEQ:" << cur_seq_num << ",";
-    #endif
-        wait_ack();
+        ++SND_NXT;
+#ifdef DEBUG
+            std::cout << "Sent SEQ:" << cur_seq_num << ",";
+#endif
+        if(SND_NXT == SND_WND) {
+            // SND size reached SND_WND
+            wait_ack();
+            SND_NXT = 0;
+        }
+#ifdef DEBUG
+        else {
+             std::cout << std::endl;
+        }
+#endif
     }
 
     void Sender::wait_ack() {
@@ -58,8 +68,9 @@ namespace jrReliableUDP {
         // Wait ACK and Retransmit function
         socklen_t len = sizeof(sockaddr_in);
         RawPacket ack_pkg;
-        ::memset(&addr, 0, len);
-        for(auto it = swnd.begin(); it != swnd.end(); ) {
+        uint16_t uSND_WND = SND_WND;
+        auto it = swnd.begin();
+        for(uint16_t cnt = 0; (cnt<SND_WND) && (it!=swnd.end()); ) {
             set_timeout();
             if(::recvfrom(sockfd, buf, sizeof(RawPacket), 0, reinterpret_cast<sockaddr*>(&addr), &len) > 0) {
                 ::memmove(&ack_pkg, buf, sizeof(RawPacket));
@@ -67,7 +78,7 @@ namespace jrReliableUDP {
                     int64_t rtt = get_time_diff_from_now_ms(ack_pkg.timestamp);
                     rto.update_RTO_ms(rtt);
                     // ACK arrived
-                    SND_WND = std::min(ack_pkg.win_size, CONG_WND); // update SND.WND by RCV.WND
+                    uSND_WND = std::min(ack_pkg.win_size, CONG_WND); // update SND.WND by RCV.WND
                     uint32_t last_seq = it->first;
     #ifdef DEBUG
                     std::cout << "Received ACK:" << ack_pkg.ack_num << ",";
@@ -79,7 +90,7 @@ namespace jrReliableUDP {
     #endif
                     if(ack_pkg.ack_num >= last_seq + 1) {
                         // Correct ACK
-                        it = swnd.erase(swnd.begin(), swnd.find(ack_pkg.ack_num));  // Update sent buffer
+                        it = swnd.erase(it);  // Update sent buffer
                         dupack_cnt = 1; // Reset counter
                         // Slow start, congestion window size index inc
                         if(CONG_WND < ssthresh) {
@@ -89,6 +100,7 @@ namespace jrReliableUDP {
                         if(is_fast_recover) {
                             is_fast_recover = false;
                         }
+                        ++cnt;
                     } else {
                         // Duplicate ACK
                         if(dupack_cnt == DUPTHRESH) {
@@ -109,6 +121,7 @@ namespace jrReliableUDP {
                         } else {
                             ++dupack_cnt;
                             ++it;
+                            ++cnt;
                         }
                         if(is_fast_recover) {
                             ++CONG_WND;
@@ -135,6 +148,7 @@ namespace jrReliableUDP {
                 }
             }
         }
+        SND_WND = uSND_WND;
         // Congestion avoidance, congestion window size linear inc
         if(CONG_WND >= ssthresh) {
             ++CONG_WND;
@@ -155,11 +169,7 @@ namespace jrReliableUDP {
             swnd[pkg.seq_num] = pkg;
             ++cur_seq_num;
         }
-        // SND size not reach SND_WND
-        if(swnd.size() < SND_WND) {
-            return ;
-        }
-        // Send all pkg in SND window
+        // Send pkgs in SND window
         send_pkgs_in_buf();
     }
 

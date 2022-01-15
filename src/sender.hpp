@@ -11,6 +11,7 @@ namespace jrReliableUDP {
         RTO& rto;
         uint32_t cur_seq_num;
         int dupack_cnt; // Duplicate ACK counter
+        uint16_t SND_NXT;
         uint16_t SND_WND;
         std::map<uint32_t, RawPacket> swnd;
         // Congress arguments
